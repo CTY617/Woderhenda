@@ -6,9 +6,11 @@ using UnityEngine.UI;
 public class LV2 : MonoBehaviour
 {
     [Header("References")]
-    public List<Image> hairImages = new List<Image>(); // multiple hair images
-    public Slider forceSlider; // visualizes simulated force based on hold duration (0..1)
-    public Slider progressSlider; // visualizes pull progress (0..1)
+    public LV2EndingController endingController;
+    public List<Image> hairImages = new List<Image>();
+    public List<Sprite> hairSprites = new List<Sprite>();
+    public Image forceFillImage; // visualizes simulated force based on hold duration (0..1)
+    public Image progressFillImage; // completed hair count / total
     int currentIndex = 0;
     List<Vector3> baseScales = new List<Vector3>();
 
@@ -22,7 +24,7 @@ public class LV2 : MonoBehaviour
     public float recoilDuration = 0.15f; // duration of quick recoil (seconds)
     public float recoilMultiplier = 1.3f; // how much to overscale on recoil (relative to base Y)
     public float immediateRecoverTime = 0.08f; // quick recover after release
-    public float decayDuration = 2f; // time (seconds) for sliders/hold to decay to zero after release
+    public float decayDuration = 2f; // time (seconds) for fill/hold to decay to zero after release
 
     Coroutine decayCoroutine = null;
 
@@ -33,7 +35,7 @@ public class LV2 : MonoBehaviour
 
     void Start()
     {
-        // cache base scales for all hair images
+        RandomizeHairSprites();
         baseScales.Clear();
         for (int i = 0; i < hairImages.Count; i++)
         {
@@ -43,33 +45,23 @@ public class LV2 : MonoBehaviour
             else
                 baseScales.Add(Vector3.one);
         }
-        // set baseScale to first hair if exists
         if (GetCurrentHairImage() != null)
             baseScale = GetCurrentHairImage().rectTransform.localScale;
-        if (progressSlider != null)
-        {
-            progressSlider.maxValue = 1f;
-            progressSlider.value = 0f;
-        }
-        if (forceSlider != null)
-        {
-            forceSlider.maxValue = 1f;
-            forceSlider.value = 0f;
-        }
+        ConfigureFillImage(forceFillImage);
+        ConfigureFillImage(progressFillImage);
+        UpdateProgressFill();
+        SetFillAmount(forceFillImage, 0f);
     }
 
     void Update()
     {
         if (removed) return;
 
-        // keyboard control: space to hold/release
         if (Input.GetKeyDown(KeyCode.Space)) StartHold();
         if (Input.GetKeyUp(KeyCode.Space)) EndHold();
 
-        // always update slider visuals based on current holdTime
         float currentT = Mathf.Clamp01(holdTime / maxHold);
-        if (progressSlider != null) progressSlider.value = currentT;
-        if (forceSlider != null) forceSlider.value = currentT;
+        SetFillAmount(forceFillImage, currentT);
 
         if (isHolding)
         {
@@ -91,8 +83,8 @@ public class LV2 : MonoBehaviour
     {
         Image cur = GetCurrentHairImage();
         if (cur == null) return;
-        float sliderVal = (forceSlider != null) ? Mathf.Clamp01(forceSlider.value) : t;
-        float multiplier = 1f + (maxStretchMultiplier - 1f) * (sliderVal * t);
+        float fillVal = GetFillAmount(forceFillImage, t);
+        float multiplier = 1f + (maxStretchMultiplier - 1f) * (fillVal * t);
         cur.rectTransform.localScale = new Vector3(baseScale.x, baseScale.y * multiplier, baseScale.z);
     }
 
@@ -101,16 +93,13 @@ public class LV2 : MonoBehaviour
         if (removed) return;
         if (isHolding) return;
         isHolding = true;
-        // stop any ongoing decay when starting a new hold
         if (decayCoroutine != null)
         {
             StopCoroutine(decayCoroutine);
             decayCoroutine = null;
         }
-        // do NOT reset holdTime so force can accumulate across presses
         if (GetCurrentHairImage() != null)
             baseScale = GetCurrentHairImage().rectTransform.localScale;
-        // sliders reflect current holdTime; no zeroing so user can resume
     }
 
     public void EndHold()
@@ -125,19 +114,16 @@ public class LV2 : MonoBehaviour
             return;
         }
 
-        float sliderVal = (forceSlider != null) ? Mathf.Clamp01(forceSlider.value) : t;
-        float finalMultiplier = 1f + (maxStretchMultiplier - 1f) * (sliderVal * t);
+        float fillVal = GetFillAmount(forceFillImage, t);
+        float finalMultiplier = 1f + (maxStretchMultiplier - 1f) * (fillVal * t);
         StopAllCoroutines();
-        // immediate rebound effect: set scale immediately, then quickly recover to base
         Image cur = GetCurrentHairImage();
         if (cur != null)
         {
             cur.rectTransform.localScale = new Vector3(baseScale.x, baseScale.y * finalMultiplier, baseScale.z);
             StartCoroutine(QuickRecover(cur, immediateRecoverTime));
         }
-        // do NOT reset holdTime so user can resume building force
 
-        // start decay coroutine to slowly lower holdTime over time
         if (decayDuration > 0f && holdTime > 0f)
         {
             if (decayCoroutine != null) StopCoroutine(decayCoroutine);
@@ -155,15 +141,12 @@ public class LV2 : MonoBehaviour
             float u = Mathf.Clamp01(elapsed / decayDuration);
             holdTime = Mathf.Lerp(start, 0f, u);
             float t = Mathf.Clamp01(holdTime / maxHold);
-            if (progressSlider != null) progressSlider.value = t;
-            if (forceSlider != null) forceSlider.value = t;
+            SetFillAmount(forceFillImage, t);
             UpdateHairStretchLive(t);
             yield return null;
         }
         holdTime = 0f;
-        if (progressSlider != null) progressSlider.value = 0f;
-        if (forceSlider != null) forceSlider.value = 0f;
-        // ensure visual reset
+        SetFillAmount(forceFillImage, 0f);
         Image cur = GetCurrentHairImage();
         if (cur != null) cur.rectTransform.localScale = baseScale;
         decayCoroutine = null;
@@ -210,8 +193,7 @@ public class LV2 : MonoBehaviour
             StopCoroutine(decayCoroutine);
             decayCoroutine = null;
         }
-        if (progressSlider != null) progressSlider.value = 0f;
-        if (forceSlider != null) forceSlider.value = 0f;
+        SetFillAmount(forceFillImage, 0f);
         StartCoroutine(RemoveHairAnimation());
     }
 
@@ -223,13 +205,11 @@ public class LV2 : MonoBehaviour
             yield break;
         }
         RectTransform rt = cur.rectTransform;
-        // --- Recoil phase: quick scale up then back to base ---
         float originalY = rt.localScale.y;
         float targetY = baseScale.y * recoilMultiplier;
         float half = Mathf.Max(0.001f, recoilDuration * 0.5f);
 
         float e = 0f;
-        // scale up
         while (e < half)
         {
             e += Time.deltaTime;
@@ -238,7 +218,6 @@ public class LV2 : MonoBehaviour
             rt.localScale = new Vector3(baseScale.x, y, baseScale.z);
             yield return null;
         }
-        // scale back to base
         e = 0f;
         while (e < half)
         {
@@ -249,7 +228,6 @@ public class LV2 : MonoBehaviour
             yield return null;
         }
 
-        // --- Fall + fade phase ---
         Vector2 startPos = rt.anchoredPosition;
         Vector2 targetPos = startPos + Vector2.down * fallDistance;
 
@@ -262,10 +240,8 @@ public class LV2 : MonoBehaviour
             elapsed += Time.deltaTime;
             float u = Mathf.Clamp01(elapsed / fallDuration);
 
-            // position: move down over full duration
             rt.anchoredPosition = Vector2.Lerp(startPos, targetPos, u);
 
-            // two-phase fade: first half to semiAlpha, second half to transparent
             float alpha;
             if (u < 0.5f)
             {
@@ -283,17 +259,15 @@ public class LV2 : MonoBehaviour
             yield return null;
         }
 
-        // ensure final state
         rt.anchoredPosition = targetPos;
         Color endColor = startColor; endColor.a = 0f;
         cur.color = endColor;
         cur.gameObject.SetActive(false);
 
-        // move to next hair if any
         currentIndex++;
+        UpdateProgressFill();
         if (currentIndex < hairImages.Count)
         {
-            // prepare next hair
             removed = false;
             holdTime = 0f;
             Image next = GetCurrentHairImage();
@@ -305,6 +279,10 @@ public class LV2 : MonoBehaviour
                 Color c = next.color; c.a = 1f; next.color = c;
             }
         }
+        else if (endingController != null)
+        {
+            endingController.Show();
+        }
     }
 
     Image GetCurrentHairImage()
@@ -312,5 +290,49 @@ public class LV2 : MonoBehaviour
         if (currentIndex >= 0 && currentIndex < hairImages.Count)
             return hairImages[currentIndex];
         return null;
+    }
+
+    void UpdateProgressFill()
+    {
+        if (progressFillImage == null) return;
+        int total = hairImages != null ? hairImages.Count : 0;
+        if (total <= 0)
+        {
+            progressFillImage.fillAmount = 0f;
+            return;
+        }
+        progressFillImage.fillAmount = Mathf.Clamp01((float)currentIndex / total);
+    }
+
+    void RandomizeHairSprites()
+    {
+        if (hairSprites == null || hairSprites.Count == 0) return;
+        for (int i = 0; i < hairImages.Count; i++)
+        {
+            Image img = hairImages[i];
+            if (img == null) continue;
+            img.sprite = hairSprites[Random.Range(0, hairSprites.Count)];
+            img.SetNativeSize();
+        }
+    }
+
+    void ConfigureFillImage(Image fillImage)
+    {
+        if (fillImage == null) return;
+        fillImage.type = Image.Type.Filled;
+        fillImage.fillMethod = Image.FillMethod.Vertical;
+        fillImage.fillOrigin = (int)Image.OriginVertical.Bottom;
+        fillImage.fillAmount = 0f;
+    }
+
+    static void SetFillAmount(Image fillImage, float amount)
+    {
+        if (fillImage != null)
+            fillImage.fillAmount = Mathf.Clamp01(amount);
+    }
+
+    static float GetFillAmount(Image fillImage, float fallback)
+    {
+        return fillImage != null ? fillImage.fillAmount : fallback;
     }
 }
